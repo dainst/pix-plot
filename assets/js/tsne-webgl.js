@@ -901,7 +901,7 @@ function addWindowEventListeners() {
     controls.handleResize();
   });
   window.addEventListener('hashchange', function(e) {
-    var hash = e.newURL.split('/#')[1];
+    var hash = e.newURL.split('#')[1];
     var coords = imageData[hash].pos;
     flyTo(coords.x, coords.y, coords.z);
   })
