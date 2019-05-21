@@ -35,9 +35,15 @@ import psutil
 import subprocess
 import codecs
 
+import keras
+from keras.models import load_model
+
+from keras.applications.resnet50 import preprocess_input
+from keras.models import Model
+
 # configure command line interface arguments
 flags = tf.app.flags
-flags.DEFINE_string('model_dir', '/tmp/imagenet', 'The location of downloaded imagenet model')
+flags.DEFINE_string('model_dir', '/tmp/ml_models', 'The location of downloaded models')
 flags.DEFINE_string('image_files', '', 'A glob path of images to process')
 flags.DEFINE_integer('clusters', 20, 'The number of clusters to display in the image browser')
 flags.DEFINE_boolean('validate_images', True, 'Whether to validate images before processing')
@@ -143,33 +149,68 @@ class PixPlot:
         """
         Create one image vector for each input file
         """
-        self.download_inception()
-        self.create_tf_graph()
+        encoder_path = self.download_custom_encoder()
+
+        print("Loading models...")
+        res_net = keras.applications.resnet50.ResNet50(include_top=False, pooling='avg')
+        encoder = load_model(encoder_path)
+
+        print("Combining models...")
+        combined = Model(inputs=res_net.input, outputs=encoder(res_net.output))
 
         print(' * creating image vectors')
-        with tf.Session() as sess:
-            for image_index, image in enumerate(self.image_files):
-                try:
-                    print(' * processing image', image_index + 1, 'of', len(self.image_files))
-                    outfile_name = os.path.basename(image) + '.npy'
-                    out_path = join(self.output_dir, 'image_vectors', outfile_name)
-                    if os.path.exists(out_path) and not self.rewrite_image_vectors:
-                        continue
-                    # save the penultimate inception tensor/layer of the current image
-                    with tf.gfile.FastGFile(image, 'rb') as f:
-                        data = {'DecodeJpeg/contents:0': f.read()}
-                        feature_tensor = sess.graph.get_tensor_by_name('pool_3:0')
-                        feature_vector = np.squeeze(sess.run(feature_tensor, data))
-                        np.save(out_path, feature_vector)
-                    # close the open files
-                    for open_file in psutil.Process().open_files():
-                        file_handler = getattr(open_file, 'fd')
-                        os.close(file_handler)
-                except Exception as exc:
-                    self.errored_images.add(get_filename(image))
-                    print(' * image', get_ascii_chars(image), 'hit a snag', exc)
 
-    def download_inception(self):
+        for image_index, image in enumerate(self.image_files):
+            try:
+                img = keras.preprocessing.image.load_img(image, target_size=(224, 224))
+                img_data = keras.preprocessing.image.img_to_array(img)
+                img_data = np.expand_dims(img_data, axis=0)
+                img_data = preprocess_input(img_data)
+
+                combined_feature = combined.predict(img_data)
+                combined_feature = np.array(combined_feature).flatten()
+                print(' * processing image', image_index + 1, 'of', len(self.image_files))
+                outfile_name = os.path.basename(image) + '.npy'
+                out_path = join(self.output_dir, 'image_vectors', outfile_name)
+                if os.path.exists(out_path) and not self.rewrite_image_vectors:
+                    continue
+
+                # save the penultimate inception tensor/layer of the current image
+                np.save(out_path, combined_feature)
+                # close the open files
+                for open_file in psutil.Process().open_files():
+                    file_handler = getattr(open_file, 'fd')
+                    os.close(file_handler)
+            except Exception as exc:
+                self.errored_images.add(get_filename(image))
+                print(' * image', get_ascii_chars(image), 'hit a snag', exc)
+
+    @staticmethod
+    def download_custom_encoder():
+        """
+        Download the inception model to FLAGS.model_dir
+        """
+        print(' * verifying encoder model availability')
+        inception_path = 'http://virginiaplain08.klassarchaeologie.uni-koeln.de/download/encoder.h5'
+        dest_directory = FLAGS.model_dir
+        ensure_dir_exists(dest_directory)
+        filename = inception_path.split('/')[-1]
+        filepath = join(dest_directory, filename)
+        if not os.path.exists(filepath):
+            def progress(count, block_size, total_size):
+                percent = float(count * block_size) / float(total_size) * 100.0
+                sys.stdout.write('\r>> Downloading %s %.1f%%' % (filename, percent))
+                sys.stdout.flush()
+
+            filepath, _ = urllib.request.urlretrieve(inception_path, filepath, progress)
+
+        print("")
+        print("Done.")
+
+        return filepath
+
+    @staticmethod
+    def download_inception():
         """
         Download the inception model to FLAGS.model_dir
         """
@@ -188,7 +229,8 @@ class PixPlot:
             filepath, _ = urllib.request.urlretrieve(inception_path, filepath, progress)
         tarfile.open(filepath, 'r:gz').extractall(dest_directory)
 
-    def create_tf_graph(self):
+    @staticmethod
+    def create_tf_graph():
         """
         Create a graph from the saved graph_def.pb
         """
