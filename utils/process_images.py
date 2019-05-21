@@ -69,6 +69,7 @@ class PixPlot:
         self.rewrite_image_thumbs = False
         self.rewrite_image_vectors = False
         self.rewrite_atlas_files = True
+        self.use_grayscale = True
         self.validate_inputs(FLAGS.validate_images)
         self.create_output_dirs()
         self.create_image_thumbs()
@@ -162,8 +163,10 @@ class PixPlot:
 
         for image_index, image in enumerate(self.image_files):
             try:
-                img = keras.preprocessing.image.load_img(image, target_size=(224, 224))
+                img = keras.preprocessing.image.load_img(image, target_size=(224, 224), grayscale=self.use_grayscale)
                 img_data = keras.preprocessing.image.img_to_array(img)
+                if self.use_grayscale:
+                    img_data = np.repeat(img_data, 3, axis=2)
                 img_data = np.expand_dims(img_data, axis=0)
                 img_data = preprocess_input(img_data)
 
