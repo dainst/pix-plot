@@ -13,8 +13,7 @@ Usage:
 """
 
 from __future__ import division, print_function
-from collections import defaultdict
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, AgglomerativeClustering
 from sklearn.metrics import pairwise_distances_argmin_min
 from sklearn.manifold import TSNE
 from multiprocessing import Pool
@@ -28,7 +27,6 @@ import tensorflow as tf
 import numpy as np
 import json
 import os
-import re
 import sys
 import tarfile
 import psutil
@@ -45,7 +43,7 @@ from keras.models import Model
 flags = tf.app.flags
 flags.DEFINE_string('model_dir', '/tmp/ml_models', 'The location of downloaded models')
 flags.DEFINE_string('image_files', '', 'A glob path of images to process')
-flags.DEFINE_integer('clusters', 20, 'The number of clusters to display in the image browser')
+flags.DEFINE_integer('clusters', 50, 'The number of clusters to display in the image browser')
 flags.DEFINE_boolean('validate_images', True, 'Whether to validate images before processing')
 flags.DEFINE_string('output_folder', 'output', 'The folder where output files will be stored')
 flags.DEFINE_string('layout', 'umap', 'The layout method to use {umap|tsne}')
@@ -191,7 +189,7 @@ class PixPlot:
     @staticmethod
     def download_custom_encoder():
         """
-        Download the inception model to FLAGS.model_dir
+        Download a custom DAI model to FLAGS.model_dir
         """
         print(' * verifying encoder model availability')
         inception_path = 'http://virginiaplain08.klassarchaeologie.uni-koeln.de/download/encoder.h5'
@@ -320,6 +318,42 @@ class PixPlot:
             })
         return centroid_json
 
+    def get_centroids_agglomerative(self):
+        """
+        Use hierarchical (ward) clustering to find n centroid iamges thar represent the center of an image cluster.
+        """
+
+        print(' * calculating ' + str(self.n_clusters) + ' clusters')
+        model = AgglomerativeClustering(linkage='ward', n_clusters=self.n_clusters)
+        X = np.array(self.image_vectors)
+        fit_model = model.fit(X)
+
+        clusters = dict()
+
+        for idx, value in enumerate(fit_model.labels_):
+            if value in clusters:
+                clusters[value] += [X[idx]]
+            else:
+                clusters[value] = [X[idx]]
+
+        centroids = []
+
+        for key in clusters:
+            centroids += [np.mean(np.array(clusters[key]), axis=0)]
+
+        centroids = np.array(centroids)
+
+        # find the points closest to the cluster centroids
+        closest, _ = pairwise_distances_argmin_min(centroids, X)
+        centroid_paths = [self.vector_files[i] for i in closest]
+        centroid_json = []
+        for c, i in enumerate(centroid_paths):
+            centroid_json.append({
+                'img': get_filename(i),
+                'label': 'Cluster ' + str(c + 1)
+            })
+        return centroid_json
+
     def write_json(self):
         """
         Write a JSON file with image positions, the number of atlas files
@@ -329,7 +363,7 @@ class PixPlot:
         out_path = join(self.output_dir, 'plot_data.json')
         with open(out_path, 'w') as out:
             json.dump({
-                'centroids': self.get_centroids(),
+                'centroids': self.get_centroids_agglomerative(),
                 'positions': self.get_2d_image_positions(),
                 'atlas_counts': self.get_atlas_counts(),
             }, out)
